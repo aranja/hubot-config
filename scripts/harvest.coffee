@@ -103,6 +103,13 @@ check_user = (robot, msg, test_user = null) ->
     
   return user
 
+check_external_account = (robot, msg, subdomain) ->
+  account = robot.brain.get "harvest-#{subdomain}"
+  unless account
+    msg.reply "You have to give migration credentials for #{subdomain} first."
+    return null
+  return account
+
 # Issues an empty GET request to harvest to test whether the service is
 # available at the moment. The callback gets passed an exception object
 # describing the connection error; if everything is fine it gets passed
@@ -291,6 +298,48 @@ module.exports = (robot) ->
       catch error
         msg.reply("Failed to stop timer: fatal error: #{error}")
 
+  # Sets up a migration account at a third party harvest app.
+  # This is used to sync timesheets using the following commands.
+  robot.respond /remember a harvest migration account (.+) with password (.+) at (.+)/i, (msg) ->
+    account = new HarvestAccount msg.match[1], msg.match[2], msg.match[3]
+    harvest = new HarvestService(account)
+
+    # If the credentials are valid, remember them, otherwise
+    # tell the user they are wrong.
+    try
+      harvest.test msg, (valid) ->
+        if valid
+          robot.brain.set "harvest-#{msg.match[3]}", account
+          msg.reply "Thanks, Iʼll remember the migration credentials."
+        else
+          msg.reply "Uh-oh – I just tested the credentials, but they appear to be wrong. Please specify the correct ones."
+    catch error
+      msg.reply "Unable to test credentials: fatal error: #{error}"
+
+  # Sets up a migration rule from own harvest to a third party.
+  robot.respond /remember a harvest migration from (.+)\/(.+) to (.+)\/(.+) at (.+)/i, (msg) ->
+    [_, from_project, from_task, to_project, to_task, to_subdomain] = msg.match
+
+    unless user = check_user(robot, msg)
+      return
+    unless to_account = check_external_account(robot, msg, to_subdomain)
+      return
+    
+    from_harvest = new HarvestService(user.harvest_account)
+    to_harvest = new HarvestService(to_account)
+
+    from_harvest.find_project_and_task msg, from_project, from_task, (from_project, from_task) ->
+      to_harvest.find_project_and_task msg, to_project, to_task, (to_project, to_task) ->
+          migration = new HarvestMigration(from_project.id, from_task.id, to_project.id, to_task.id, to_subdomain)
+
+          migrations = robot.brain.get("harvest-#{to_subdomain}-migrations") || []
+          migrations.push(migration)
+          robot.brain.set("harvest-#{to_subdomain}-migrations", migrations)
+
+          msg.reply "Thanks, I'll remember to migrate from #{from_project.name}/#{from_task.name} to #{to_project.name}/#{to_task.name} at #{to_subdomain}"
+
+  robot.respond /migrate (.+) harvest/i, (msg) ->
+
 # Class encapsulating a user's Harvest credentials; safe to store
 # in Hubot's Redis brain (no methods, this is a data-only construct).
 class HarvestAccount
@@ -301,6 +350,15 @@ class HarvestAccount
   constructor: (email, password, subdomain) ->
     @email     = email
     @password  = password
+    @subdomain = subdomain if subdomain
+
+# Class encapsulating a harvest migration rule; safe to store in
+# Hubot's Redis brain (no methods, this is a data-only construct).
+class HarvestMigration
+
+  # Create a new harvet migration. Pass in the name of project and task
+  # to migrate from and to.
+  constructor: (@from_project, @from_task, @to_project, @to_task, @to_subdomain) ->
 
 # This class represents a user's connection to the Harvest API;
 # it is bound to a specific account and cannot be stored permanently
@@ -318,7 +376,8 @@ class HarvestService
   # Creates a new connection to the Harvest API for the given
   # account.
   constructor: (account) ->
-    @base_url = "https://#{process.env.HUBOT_HARVEST_SUBDOMAIN}.harvestapp.com"
+    subdomain = account.subdomain || process.env.HUBOT_HARVEST_SUBDOMAIN
+    @base_url = "https://#{subdomain}.harvestapp.com"
     @account = account
   
   # Tests whether the account credentials are valid.
