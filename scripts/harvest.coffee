@@ -64,6 +64,24 @@
 #     Gives you a list of all project/task combinations available
 #     to you or a specific user. You can use these for the start command.
 #
+#   hubot remember a harvest migration account <email> with password <password> at <harvest-subdomain>
+#     Saves Harvest credentials for an external Harvest account to
+#     allow Hubot to perform timesheet migrations.
+#
+#   hubot remember a harvest migration from <project>[/<task>] to <project>[/<task>] at <harvest-subdomain>
+#     Saves a Harvest migration of timesheets from one project in your
+#     Harvest account to a project on another Harvest account.
+#     Project and task arguments may be abbreviated.
+#     Defaults to migrating all tasks to a "dev" task.
+#
+#   hubot list harvest migrations for <harvest-subdomain>
+#     Hubot responds with the currently remembered migrations for an
+#     external Harvest account.
+#
+#   hubot migrate [<num> days of ]<harvest-subdomain> harvest
+#     Starts a Harvest timesheet migration. Comparing the past few
+#     days (7 by default) and updates the external Harvest as needed.
+#
 #   Note on HUBOT_HARVEST_SUBDOMAIN:
 #     This is the subdomain you access the Harvest service with, e.g.
 #     if you have the Harvest URL http://yourcompany.harvestapp.com
