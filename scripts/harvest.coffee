@@ -73,6 +73,7 @@
 #   Quintus @ Asquera
 #
 http = require("http")
+async = require("async")
 
 unless process.env.HUBOT_HARVEST_SUBDOMAIN
   console.log "Please set HUBOT_HARVEST_SUBDOMAIN in the environment to use the harvest plugin script."
@@ -103,12 +104,42 @@ check_user = (robot, msg, test_user = null) ->
     
   return user
 
+# Checks if we have authentication information for a third party Harvest
+# account. If we don't, reply accordingly and return null. Otherwise,
+# return the HarvestAccount.
 check_external_account = (robot, msg, subdomain) ->
   account = robot.brain.get "harvest-#{subdomain}"
   unless account
     msg.reply "You have to give migration credentials for #{subdomain} first."
     return null
   return account
+
+# Checks if there are migrations registered for a third party Harvest
+# account. Returns null or the migrations accordingly.
+check_migrations = (robot, msg, subdomain) ->
+  migrations = robot.brain.get "harvest-#{subdomain}-migrations"
+  unless migrations && migrations.length
+    msg.reply "Sorry, there are no migrations set up for #{subdomain}."
+    return null
+  return migrations
+
+check_error = (err, res) ->
+  if err
+    return err
+  else if res and !(200 <= res.statusCode <= 299)
+    return new Error("Status code #{res.statusCode}")
+  return null
+
+handle_error = (msg, err, action) ->
+  if err
+    msg.reply "Failed to #{action}: #{err.message}"
+    return true
+  return false
+
+date_plus_days = (days) ->
+  date = new Date()
+  date.setDate(date.getDate() + days)
+  date
 
 # Issues an empty GET request to harvest to test whether the service is
 # available at the moment. The callback gets passed an exception object
@@ -127,20 +158,11 @@ check_harvest_down = (callback) ->
     callback null
   req.on "error", (error) ->
     callback error
-  req.setTimeout 5000, ->
-    req.destroy() # Cancel the request
-    callback "Connection timeout"
+  req.setTimeout 5000
   req.end()
 
 ### Definitions for hubot ###
 module.exports = (robot) ->
-
-  # Periodically check the Harvest service for availability
-  cb = ->
-    check_harvest_down (error) ->
-      if (error)
-        robot.send "broadcast", "Harvest appears to be down; exact error is: #{error}"
-  setInterval(cb, 600000) # 10 Minutes in milliseconds
 
   # Check if Harvest is available.
   robot.respond /is harvest (down|up)/i, (msg) ->
@@ -157,15 +179,12 @@ module.exports = (robot) ->
 
     # If the credentials are valid, remember them, otherwise
     # tell the user they are wrong.
-    try
-      harvest.test msg, (valid) ->
-        if valid
-          msg.message.user.harvest_account = account
-          msg.reply "Thanks, Iʼll remember your credentials. Have fun with Harvest."
-        else
-          msg.reply "Uh-oh – I just tested your credentials, but they appear to be wrong. Please specify the correct ones."
-    catch error
-      msg.reply "Unable to test credentials: fatal error: #{error}"
+    harvest.test msg, (valid) ->
+      if valid
+        msg.message.user.harvest_account = account
+        msg.reply "Thanks, Iʼll remember your credentials. Have fun with Harvest."
+      else
+        msg.reply "Uh-oh – I just tested your credentials, but they appear to be wrong. Please specify the correct ones."
 
   # Allows a user to delete his credentials.
   robot.respond /forget my harvest account/i, (msg) ->
@@ -181,35 +200,30 @@ module.exports = (robot) ->
     if msg.match[3]
       target_date = new Date(parseInt(msg.match[4]), parseInt(msg.match[5] - 1), parseInt(msg.match[6])) # Month starts at 0
 
-    try
-      if target_date
-        harvest.daily_at msg, target_date, (status, body) ->
-          if 200 <= status <= 299
-            if body.day_entries.length == 0
-              msg.reply "#{user.name} has no entries on #{target_date}."
-            else
-              msg.reply "#{user.name}'s entries on #{target_date}:"
-              
-            for entry in body.day_entries
-              if entry.ended_at == ""
-                msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [running since #{entry.started_at} (#{entry.hours}h)]"
-              else
-                msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [#{entry.started_at} – #{entry.ended_at} (#{entry.hours}h)]"
+    if target_date
+      harvest.daily_at msg, target_date, (err, body) ->
+        if handle_error msg, err, "retrieve entry information"
+          return
+        if body.day_entries.length == 0
+          msg.reply "#{user.name} has no entries on #{target_date}."
+        else
+          msg.reply "#{user.name}'s entries on #{target_date}:"
+
+        for entry in body.day_entries
+          if entry.ended_at == ""
+            msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [running since #{entry.started_at} (#{entry.hours}h)]"
           else
-            msg.reply "Failed to retrieve entry information: request failed with status #{status}."
-      else
-        harvest.daily msg, (status, body) ->
-          if 200 <= status <= 299
-            msg.reply "Your entries for today, #{user.name}:"
-            for entry in body.day_entries
-              if entry.ended_at == ""
-                msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [running since #{entry.started_at} (#{entry.hours}h)]"
-              else
-                msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [#{entry.started_at} – #{entry.ended_at} (#{entry.hours}h)]"
+            msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [#{entry.started_at} – #{entry.ended_at} (#{entry.hours}h)]"
+    else
+      harvest.daily msg, (err, body) ->
+        if handle_error msg, err, "retrieve entry information"
+          return
+        msg.reply "Your entries for today, #{user.name}:"
+        for entry in body.day_entries
+          if entry.ended_at == ""
+            msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [running since #{entry.started_at} (#{entry.hours}h)]"
           else
-            msg.reply "Failed to retrieve entry information: request failed with status #{status}."
-    catch error
-      msg.reply("Failed to retrieve entry information: fatal error: #{error}")
+            msg.reply "• #{entry.project} (#{entry.client}) → #{entry.task} <#{entry.notes}> [#{entry.started_at} – #{entry.ended_at} (#{entry.hours}h)]"
 
   # List all project/task combinations that are available to a user.
   robot.respond /list harvest tasks( of (.+))?/i, (msg) ->
@@ -217,18 +231,15 @@ module.exports = (robot) ->
       return
 
     harvest = new HarvestService(user.harvest_account)
-    try
-      harvest.daily msg, (status, body) ->
-        if 200 <= status <= 299
-          msg.reply "The following project/task combinations are available for you, #{user.name}:"
-          for project in body.projects
-            msg.reply "• Project #{project.name}"
-            for task in project.tasks
-              msg.reply "  ‣ #{task.name} (#{if task.billable then 'billable' else 'non-billable'})"
-        else
-          msg.reply "Failed to retrieve project/task list: request failed with status #{status}."
-    catch error
-      msg.reply "Failed to retrieve project/task list: fatal error: #{error}"
+
+    harvest.daily msg, (err, body) ->
+      if handle_error msg, err, "retrieve project/task list"
+        return
+      msg.reply "The following project/task combinations are available for you, #{user.name}:"
+      for project in body.projects
+        msg.reply "• Project #{project.name}"
+        for task in project.tasks
+          msg.reply "  ‣ #{task.name} (#{if task.billable then 'billable' else 'non-billable'})"
 
   # Kick off a new timer, stopping the previously running one, if any.
   robot.respond /start harvest at (.+)\/(.+): (.*)/i, (msg) ->
@@ -240,16 +251,12 @@ module.exports = (robot) ->
     task    = msg.match[2]
     notes   = msg.match[3]
 
-    try
-      harvest.start msg, project, task, notes, (status, body) ->
-        if 200 <= status <= 299
-          if body.hours_for_previously_running_timer?
-            msg.reply "Previously running timer stopped at #{body.hours_for_previously_running_timer}h."
-          msg.reply "OK, I started tracking you on #{body.project}/#{body.task}."
-        else
-          msg.reply "Failed to start timer: request failed with status #{status}."
-    catch error
-      msg.reply "Failed to start timer: fatal error: #{error}"
+    harvest.start msg, project, task, notes, (err, body) ->
+      if handle_error msg, err, "start timer"
+        return
+      if body.hours_for_previously_running_timer?
+        msg.reply "Previously running timer stopped at #{body.hours_for_previously_running_timer}h."
+      msg.reply "OK, I started tracking you on #{body.project}/#{body.task}."
 
   robot.respond /start harvest$/i, (msg) ->
     unless user = check_user(robot, msg)
@@ -257,16 +264,12 @@ module.exports = (robot) ->
 
     harvest = new HarvestService(user.harvest_account)
 
-    try
-      harvest.restart msg, (status, body) ->
-        if 200 <= status <= 299
-          if body.hours_for_previously_running_timer?
-            msg.reply "Previously running timer stopped at #{body.hours_for_previously_running_timer}h."
-          msg.reply "OK, I started tracking you on #{body.project}/#{body.task}."
-        else
-          msg.reply "Failed to start timer: request failed with status #{status}."
-    catch error
-      msg.reply "Failed to start timer: fatal error: #{error}"
+    harvest.restart msg, (err, body) ->
+      if handle_error msg, err, "start timer"
+        return
+      if body.hours_for_previously_running_timer?
+        msg.reply "Previously running timer stopped at #{body.hours_for_previously_running_timer}h."
+      msg.reply "OK, I started tracking you on #{body.project}/#{body.task}."
 
   # Stops the timer running for a project/task combination,
   # if any. If no combination is given, stops the first
@@ -279,24 +282,16 @@ module.exports = (robot) ->
     if msg.match[1]
       project = msg.match[2]
       task    = msg.match[3]
-      try
-        harvest.stop msg, project, task, (status, body) ->
-          if 200 <= status <= 299
-            msg.reply "Timer stopped (#{body.hours}h)."
-          else
-            msg.reply "Failed to stop timer: request failed with status #{status}."
-            msg.reply body
-      catch error
-        msg.reply("Failed to stop timer: fatal error: #{error}")
+
+      harvest.stop msg, project, task, (err, body) ->
+        if handle_error msg, err, "stop timer"
+          return
+        msg.reply "Timer stopped (#{body.hours}h)."
     else
-      try
-        harvest.stop_first msg, (status, body) ->
-          if 200 <= status <= 299
-            msg.reply "Timer stopped (#{body.hours}h)."
-          else
-            msg.reply "Failed to stop timer: request failed with status #{status}."
-      catch error
-        msg.reply("Failed to stop timer: fatal error: #{error}")
+      harvest.stop_first msg, (err, body) ->
+        if handle_error msg, err, "stop timer"
+          return
+        msg.reply "Timer stopped (#{body.hours}h)."
 
   # Sets up a migration account at a third party harvest app.
   # This is used to sync timesheets using the following commands.
@@ -306,39 +301,88 @@ module.exports = (robot) ->
 
     # If the credentials are valid, remember them, otherwise
     # tell the user they are wrong.
-    try
-      harvest.test msg, (valid) ->
-        if valid
-          robot.brain.set "harvest-#{msg.match[3]}", account
-          msg.reply "Thanks, Iʼll remember the migration credentials."
-        else
-          msg.reply "Uh-oh – I just tested the credentials, but they appear to be wrong. Please specify the correct ones."
-    catch error
-      msg.reply "Unable to test credentials: fatal error: #{error}"
+    harvest.test msg, (valid) ->
+      if valid
+        robot.brain.set "harvest-#{msg.match[3]}", account
+        msg.reply "Thanks, Iʼll remember the migration credentials."
+      else
+        msg.reply "Uh-oh – I just tested the credentials, but they appear to be wrong. Please specify the correct ones."
 
   # Sets up a migration rule from own harvest to a third party.
-  robot.respond /remember a harvest migration from (.+)\/(.+) to (.+)\/(.+) at (.+)/i, (msg) ->
-    [_, from_project, from_task, to_project, to_task, to_subdomain] = msg.match
+  robot.respond /remember a harvest migration from (.+)(?:\/(.+))? to (.+)(?:\/(.+))? at (.+)/i, (msg) ->
+    [_, source_project, source_task, target_project, target_task, subdomain] = msg.match
+    source_task or= "*"
+    target_task or= "dev"
+    subdomain = subdomain.toLowerCase()
 
     unless user = check_user(robot, msg)
       return
-    unless to_account = check_external_account(robot, msg, to_subdomain)
+    unless to_account = check_external_account(robot, msg, subdomain)
       return
     
     from_harvest = new HarvestService(user.harvest_account)
     to_harvest = new HarvestService(to_account)
 
-    from_harvest.find_project_and_task msg, from_project, from_task, (from_project, from_task) ->
-      to_harvest.find_project_and_task msg, to_project, to_task, (to_project, to_task) ->
-          migration = new HarvestMigration(from_project.id, from_task.id, to_project.id, to_task.id, to_subdomain)
+    from_harvest.find_project_and_task msg, source_project, source_task, (source_project, source_task) ->
+      to_harvest.find_project_and_task msg, target_project, target_task, (target_project, target_task) ->
+        migrations = robot.brain.get("harvest-#{subdomain}-migrations") || []
+        migration = migrations.filter((m) -> m.source_project.id == source_project.id)[0]
 
-          migrations = robot.brain.get("harvest-#{to_subdomain}-migrations") || []
-          migrations.push(migration)
-          robot.brain.set("harvest-#{to_subdomain}-migrations", migrations)
+        migration = new HarvestMigration(migration || {source_project, target_project})
 
-          msg.reply "Thanks, I'll remember to migrate from #{from_project.name}/#{from_task.name} to #{to_project.name}/#{to_task.name} at #{to_subdomain}"
+        if migration.target_project.id != target_project.id
+          return msg.reply "Existing migration configured for #{migration.target_project.name} instead of #{target_project.name}"
 
-  robot.respond /migrate (.+) harvest/i, (msg) ->
+        migration.add_task_rule(source_task, target_task)
+
+        migrations = migrations.filter((m) -> m.source_project.id != migration.source_project.id).concat [migration]
+        robot.brain.set("harvest-#{subdomain}-migrations", migrations)
+
+        unless source_task
+          msg.reply "Thanks, I'll remember to migrate #{source_project.name} by default to #{target_project.name}/#{target_task.name} at #{subdomain}"
+        else
+          msg.reply "Thanks, I'll remember to migrate from #{source_project.name}/#{source_task.name} to #{target_project.name}/#{target_task.name} at #{subdomain}"
+
+  robot.respond /list harvest migrations (?:for|to) (.+)/i, (msg) ->
+    subdomain = msg.match[1]
+    migrations = robot.brain.get("harvest-#{subdomain}-migrations") || []
+
+    if migrations.length == 0
+      msg.reply "No migrations found for #{subdomain}"
+    for migration in migrations
+      msg.reply "Migrating #{migration.source_project.name} to #{migration.target_project.name}"
+
+  robot.respond /migrate (?:(\d+) days of )?(.+) harvest/i, (msg) ->
+    [_, days, subdomain] = msg.match
+    days ?= 7
+
+    unless user = check_user(robot, msg)
+      return
+    unless to_account = check_external_account(robot, msg, subdomain)
+      return
+    unless migrations = check_migrations(robot, msg, subdomain)
+      return
+
+    from_harvest = new HarvestService(user.harvest_account)
+    to_harvest = new HarvestService(to_account)
+
+    async.mapSeries migrations, (migration, callback) ->
+      migration = new HarvestMigration(migration)
+      migration.run msg, from_harvest, to_harvest, days, (err, migrated_hours) ->
+        if err
+          msg.reply "Encountered error migrating #{migration.source_project.name}: #{err}"
+        if migrated_hours > 0
+          msg.reply "Migrated #{migrated_hours.toFixed(2)} #{migration.source_project.name} hours to #{to_harvest.account.subdomain}."
+        else if migrated_hours < 0
+          msg.reply "Deleted #{(-migrated_hours).toFixed(2)} #{migration.source_project.name} hours from #{to_harvest.account.subdomain}."
+        else if !err
+          msg.reply "#{migration.source_project.name} is already in sync with #{to_harvest.account.subdomain}."
+        callback()
+        
+    # Get source entries.
+    # Get target entries.
+    # Skip matched entries.
+    # Create/update remaining entries in target.
 
 # Class encapsulating a user's Harvest credentials; safe to store
 # in Hubot's Redis brain (no methods, this is a data-only construct).
@@ -358,7 +402,98 @@ class HarvestMigration
 
   # Create a new harvet migration. Pass in the name of project and task
   # to migrate from and to.
-  constructor: (@from_project, @from_task, @to_project, @to_task, @to_subdomain) ->
+  constructor: ({source_project, target_project, task_default_id, task_mapping}) ->
+    @source_project = {name: source_project.name, id: source_project.id}
+    @target_project = {name: target_project.name, id: target_project.id}
+    @task_default_id = task_default_id || null
+    @task_mapping = task_mapping || []
+
+  add_task_rule: (from_task, to_task) ->
+    if !from_task
+      @task_default_id = to_task.id
+    else
+      @task_mapping[from_task.id] = to_task.id
+
+  run: (msg, source_harvest, target_harvest, days = 7, callback) ->
+    date_range = (date_plus_days(-i) for i in [0...days])
+    to_date = date_range[0]
+    from_date = date_range[date_range.length - 1]
+    migrated_hours = 0
+
+    # Wrap callback so migrated_hours is always returned.
+    callback = do (callback) ->
+      (err) -> callback(err, migrated_hours)
+
+    # Get reports from source and target harvest.
+    source_harvest.report msg, @source_project.id, from_date, to_date, (err, source_entries) =>
+      if err then return callback new Error("While fetching source report: #{err.message}")
+
+      # Get entries for each day in target harvest. We use the daily api since
+      # we probably don't have admin access to the target harvest.
+      async.mapLimit date_range, 3, (date, cb) ->
+        target_harvest.daily_at msg, date, (err, body) ->
+          cb err, body && body.day_entries
+      , (err, target_entries) =>
+        if err then callback new Error("While fetching target report: #{err.message}")
+
+        # Calculate number of hours per day and target task in source.
+        source_entries = source_entries.reduce (days, entry) =>
+          if target_task = @target_task_for(entry.task_id)
+            key = "#{entry.spent_at},#{target_task}"
+            days[key] ||= 0
+            days[key] += entry.hours
+          days
+        , {}
+
+        # Flatten target entries
+        target_entries = target_entries.reduce ((all, entries) -> all.concat(entries)), []
+
+        # Find a synced entry in target by day and task to update or delete.
+        target_entries = target_entries.reduce (days, entry) ->
+          key = "#{entry.spent_at},#{entry.task_id}"
+          days[key] = entry if entry.notes?.indexOf("#sync") >= 0
+          days
+        , {}
+
+        jobs = [];
+        for own key, hours of source_entries
+          hours = Math.round(hours * 100) / 100
+          [spent_at, task_id] = key.split ','
+
+          entry = target_entries[key] || {task_id, spent_at, project_id: @target_project.id, notes: "#sync", hours: 0}
+          delete target_entries[key]
+
+          if entry.hours == hours
+            continue
+
+          diff = hours - entry.hours
+          entry.hours = hours
+          if entry.id
+            jobs.push ["update_entry", entry, diff]
+          else
+            jobs.push ["create_entry", entry, diff]
+
+        for own key, entry of target_entries
+          jobs.push ["delete_entry", entry, -entry.hours]
+
+        async.mapLimit jobs, 3, (job, callback) ->
+          [func, entry, diff] = job
+          target_harvest[func] msg, entry, (err) ->
+            migrated_hours += diff unless err
+            callback null, err
+        , (err, errs) ->
+          errs = errs.filter((err) -> err)
+          if errs.length == 1
+            err = errs[0]
+          else if errs.length > 0
+            err = new Error("First of #{errs.length} errors: #{errs[0].message}")
+          callback(err)
+
+  target_task_for: (source_task_id) ->
+    if source_task_id of @task_mapping
+      @task_mapping[source_task_id]
+    else
+      @task_default_id
 
 # This class represents a user's connection to the Harvest API;
 # it is bound to a specific account and cannot be stored permanently
@@ -385,45 +520,79 @@ class HarvestService
   # it gets passed `false`.
   test: (msg, callback) ->
     this.request(msg).path("account/who_am_i").get() (err, res, body) ->
-      if 200 <= res.statusCode <= 299
-        callback true
-      else
+      if err = check_error(err, res)
         callback false
+      else
+        callback true
 
   # Issues /daily to the Harvest API.
   daily: (msg, callback) ->
     this.request(msg).path("/daily").get() (err, res, body) ->
-      if 200 <= res.statusCode <= 299
-        callback res.statusCode, JSON.parse(body)
+      if err = check_error(err, res)
+        callback err
       else
-        callback res.statusCode, null
+        callback null, JSON.parse(body)
 
   # Issues /daily/<dayofyear>/<year> to the Harvest API.
   daily_at: (msg, date, callback) ->
     this.request(msg).path("/daily/#{this.day_of_year(date)}/#{date.getFullYear()}").get() (err, res, body) ->
-      if 200 <= res.statusCode <= 299
-        callback res.statusCode, JSON.parse(body)
+      if err = check_error(err, res)
+        callback err
       else
-        callback res.statusCode, null
+        callback null, JSON.parse(body)
+
+  # Issues /projects/<project_id>/entries?from=<from>&to=<to> to the harvest API.
+  report: (msg, project_id, from_date, to_date, callback) ->
+    path = "/projects/#{project_id}/entries?from=#{this.date_arg(from_date)}&to=#{this.date_arg(to_date)}"
+    this.request(msg).path(path).get() (err, res, body) ->
+      if err = check_error(err, res)
+        callback err
+      else
+        callback null, JSON.parse(body).map (record) -> record.day_entry
+
+  create_entry: (msg, entry, callback) ->
+    path = "/daily/add"
+    data = JSON.stringify(entry)
+    this.request(msg).path(path).post(data) (err, res, body) ->
+      if err = check_error(err, res)
+        callback err
+      else
+        callback null, JSON.parse(body)
+
+  update_entry: (msg, entry, callback) ->
+    path = "/daily/update/#{entry.id}"
+    data = JSON.stringify(entry)
+    this.request(msg).path(path).post(data) (err, res, body) ->
+      if err = check_error(err, res)
+        callback err
+      else
+        callback null, JSON.parse(body)
+
+  delete_entry: (msg, entry, callback) ->
+    path = "/daily/delete/#{entry.id}"
+    this.request(msg).path(path).del() (err, res, body) ->
+      if err = check_error(err, res)
+        callback err
+      else
+        callback()
 
   restart: (msg, callback) ->
-    this.daily msg, (status, body) =>
-      if 200 <= status <= 299
-        if body.day_entries.length == 0
-          msg.reply "No last entry to restart, sorry."
-        else
-          last_entry = body.day_entries.pop()
-          data =
-            notes: last_entry.notes
-            project_id: last_entry.project_id
-            task_id: last_entry.task_id
-          this.request(msg).path("/daily/add").post(JSON.stringify(data)) (err, res, body) ->
-            if 200 <= res.statusCode <= 299
-              callback res.statusCode, JSON.parse(body)
-            else
-              callback res.statusCode, null
+    this.daily msg, (err, body) =>
+      if err then return callback err
+
+      if body.day_entries.length == 0
+        msg.reply "No last entry to restart, sorry."
       else
-        callback status, null
+        last_entry = body.day_entries.pop()
+        data =
+          notes: last_entry.notes
+          project_id: last_entry.project_id
+          task_id: last_entry.task_id
+        this.request(msg).path("/daily/add").post(JSON.stringify(data)) (err, res, body) ->
+          if err = check_error(err, res)
+            callback err
+          else
+            callback null, JSON.parse(body)
 
   # Issues /daily/add to the Harvest API to add a new timer
   # starting from now.
@@ -435,10 +604,10 @@ class HarvestService
         project_id: project.id
         task_id: task.id
       this.request(msg).path("/daily/add").post(JSON.stringify(data)) (err, res, body) ->
-        if 200 <= res.statusCode <= 299
-          callback res.statusCode, JSON.parse(body)
+        if err = check_error(err, res)
+          callback err
         else
-          callback res.statusCode, null
+          callback null, JSON.parse(body)
 
   # Issues /daily/timer/<id> to the Harvest API to stop
   # the timer running at `entry.id`. If that timer isn't
@@ -447,10 +616,10 @@ class HarvestService
   stop_entry: (msg, entry, callback) ->
     if entry.timer_started_at?
       this.request(msg).path("/daily/timer/#{entry.id}").get() (err, res, body) ->
-        if 200 <= res.statusCode <= 299
-          callback res.statusCode, JSON.parse(body)
+        if err = check_error(err, res)
+          callback err
         else
-          callback res.statusCode, null
+          callback null, JSON.parse(body)
     else
       msg.reply "This timer is not running."
 
@@ -462,8 +631,9 @@ class HarvestService
   # replies with an error message and doesn't executes the
   # callback.
   stop: (msg, target_project, target_task, callback) ->
-    this.find_day_entry msg, target_project, target_task, (entry) =>
-      this.stop_entry msg, entry, (status, body) -> callback status, body
+    this.find_day_entry msg, target_project, target_task, (err, entry) =>
+      if err then return callback err
+      this.stop_entry msg, entry, callback
 
   # Issues /daily/timer/<id> to the Harvest API to stop
   # the timer running at <id>, which is the first active
@@ -471,7 +641,8 @@ class HarvestService
   # callback. If no active timer is found, replies accordingly
   # and doesn't execute the callback.
   stop_first: (msg, callback) ->
-    this.daily msg, (status, body) =>
+    this.daily msg, (err, body) =>
+      if err then return callback err
       found_entry = null
       for entry in body.day_entries
         if entry.timer_started_at?
@@ -479,7 +650,7 @@ class HarvestService
           break
 
       if found_entry?
-        this.stop_entry msg, found_entry, (status, body) -> callback status, body
+        this.stop_entry msg, found_entry, callback
       else
         msg.reply "Currently there is no timer running."
 
@@ -507,7 +678,9 @@ class HarvestService
   # reply accordingly to the user (the callback never gets
   # executed in this case).
   find_project_and_task: (msg, target_project, target_task, callback) ->
-    this.daily msg, (status, body) ->
+    this.daily msg, (err, body) ->
+      if err then callback err
+
       # Search through all possible projects for the matching ones
       projects = []
       for project in body.projects
@@ -523,6 +696,10 @@ class HarvestService
           msg.reply "• #{project.name}"
         return
 
+      # Exit early if only project is being searched for
+      if target_task == "*"
+        return callback null, projects[0]
+
       # Repeat the same process for the tasks
       tasks = []
       for task in projects[0].tasks
@@ -537,7 +714,7 @@ class HarvestService
         return
 
       # Execute the callback with the results
-      callback projects[0], tasks[0]
+      callback null, projects[0], tasks[0]
 
   # (internal method)
   # Searches through all entries made for today and tries
@@ -547,8 +724,10 @@ class HarvestService
   # the callback, otherwise an error message is replied and
   # the callback doesn't get executed.
   find_day_entry: (msg, target_project, target_task, callback) ->
-    this.find_project_and_task msg, target_project, target_task, (project, task) =>
-      this.daily msg, (status, body) ->
+    this.find_project_and_task msg, target_project, target_task, (err, project, task) =>
+      if err then return callback err
+      this.daily msg, (err, body) ->
+        if err then return callback err
         # For some unknown reason, the daily entry IDs are strings
         # instead of numbers, causing the comparison below to fail.
         # So, convert our target stuff to strings as well.
@@ -568,11 +747,18 @@ class HarvestService
           return
 
         # Execute the callback with the result
-        callback found_entry
+        callback null, found_entry
 
   # Takes a Date object and figures out which day in its
   # year it represents and returns that one. Leap years
   # are honoured.
   day_of_year: (date) ->
-    start = new Date(date.getFullYear(), 0, 0)
+    start = new Date(date.getFullYear(), 0, 1)
     return Math.ceil((date - start) / 86400000)
+
+  # Takes a Date object and formats it as a date argument
+  # which Harvest expects.
+  date_arg: (date) ->
+    month = (101 + date.getMonth() + "")[1..2]
+    day = (100 + date.getDate() + "")[1..2]
+    return "#{date.getFullYear()}#{month}#{day}"
