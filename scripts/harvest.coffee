@@ -504,7 +504,7 @@ class HarvestMigration
 
         # Find a synced entry in target by day and task to update or delete.
         target_entries = target_entries.reduce (days, entry) =>
-          if entry.notes?.indexOf("#sync") >= 0 and entry.project_id != @target_project.id
+          if entry.notes?.indexOf("#sync") >= 0 and entry.project_id == @target_project.id
             key = "#{entry.spent_at},#{entry.task_id}"
             days[key] = entry
           days
