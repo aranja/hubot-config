@@ -19,6 +19,7 @@
 #   hubot is harvest down/up - Check if the Harvest API is reachable.
 #   hubot remember a harvest migration account <email> with password <password> at <harvest-subdomain> - Make hubot remember external Harvest credentials.
 #   hubot remember a harvest migration from <project>[/<task>] to <project>[/<task>] at <harvest-subdomain> - Make hubot remember a timesheet migration setup.
+#   hubot forget harvest migrations for <project> at <harvest-subdomain> - Remove timesheet migration from memory
 #   hubot migrate [<num> days of ]<harvest-subdomain> harvest - Runs a timesheet migration to an external Harvest
 #
 # Notes:
@@ -77,6 +78,11 @@
 #     Project and task arguments may be abbreviated.
 #     Defaults to migrating all tasks to a "dev" task.
 #
+#   hubot forget harvest migrations for <project> at <harvest-subdomain> - Remove timesheet migration from memory
+#     Remove timesheet migration for a specific project from memory
+#     so it won't be migrated. If you need to change a configuration,
+#     just remove it and create it anew.
+#     
 #   hubot list harvest migrations for <harvest-subdomain>
 #     Hubot responds with the currently remembered migrations for an
 #     external Harvest account.
@@ -372,6 +378,30 @@ module.exports = (robot) ->
         else
           msg.reply "Thanks, I'll remember to migrate from #{source_project.name}/#{source_task.name} to #{target_project.name}/#{target_task.name} at #{subdomain}"
 
+  robot.respond /forget (?:a|all)? harvest migrations? for (.+) (?:to|at) (.+)/i, (msg) ->
+    [_, source_project, subdomain] = msg.match
+    subdomain = subdomain.toLowerCase()
+
+    unless user = check_user(robot, msg)
+      return
+    unless to_account = check_external_account(robot, msg, subdomain)
+      return
+
+    from_harvest = new HarvestService(user.harvest_account)
+    to_harvest = new HarvestService(to_account)
+
+    from_harvest.find_project_and_task msg, source_project, "*", (err, source_project, source_task) ->
+      if handle_error msg, err, "finding project"
+        return
+      migrations = robot.brain.get("harvest-#{subdomain}-migrations") || []
+      new_migrations = migrations.filter((m) -> m.source_project.id != source_project.id)
+
+      if migrations.length == new_migrations.length
+        return msg.reply "Project " + source_project + " is not configured for timesheet migration."
+
+      robot.brain.set("harvest-#{subdomain}-migrations", new_migrations)
+      msg.reply "Thanks, I'll remember to not migration #{source_project.name} to #{subdomain}"
+
   robot.respond /list harvest migrations (?:for|to) (.+)/i, (msg) ->
     subdomain = msg.match[1]
     migrations = robot.brain.get("harvest-#{subdomain}-migrations") || []
@@ -407,11 +437,6 @@ module.exports = (robot) ->
         else if !err
           msg.reply "#{migration.source_project.name} is already in sync with #{to_harvest.account.subdomain}."
         callback()
-        
-    # Get source entries.
-    # Get target entries.
-    # Skip matched entries.
-    # Create/update remaining entries in target.
 
 # Class encapsulating a user's Harvest credentials; safe to store
 # in Hubot's Redis brain (no methods, this is a data-only construct).
