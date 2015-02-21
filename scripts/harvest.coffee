@@ -714,7 +714,12 @@ class HarvestService
       projects = []
       for project in body.projects
         if project.name.toLowerCase().indexOf(target_project.toLowerCase()) != -1
-          projects.push(project)
+          if project.name == target_project
+            projects = [project] # Exact match
+            break
+          else
+            projects.push(project)
+
       # Ask the user if the project name is ambivalent
       if projects.length == 0
         msg.reply "Sorry, no matching projects found."
@@ -733,7 +738,13 @@ class HarvestService
       tasks = []
       for task in projects[0].tasks
         if task.name.toLowerCase().indexOf(target_task.toLowerCase()) != -1
-          tasks.push(task)
+          if task.name == target_task
+            tasks = [task] # Exact match
+            break
+          else
+            tasks.push(task)
+
+      # Ask the user if the task name is ambivalent
       if tasks.length == 0
         msg.reply "Sorry, no matching tasks found."
       else if tasks.length > 1
