@@ -503,10 +503,15 @@ class HarvestMigration
         target_entries = target_entries.reduce ((all, entries) -> all.concat(entries)), []
 
         # Find a synced entry in target by day and task to update or delete.
+        redundant_counter = 0
         target_entries = target_entries.reduce (days, entry) =>
-          if entry.notes?.indexOf("#sync") >= 0 and entry.project_id == @target_project.id
-            key = "#{entry.spent_at},#{entry.task_id}"
+          unless entry.notes?.indexOf("#sync") >= 0 and entry.project_id == @target_project.id
+            return days
+          key = "#{entry.spent_at},#{entry.task_id}"
+          unless key of days
             days[key] = entry
+          else
+            days["redundant_#{redundant_counter++}"] = entry
           days
         , {}
 
