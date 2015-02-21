@@ -82,7 +82,7 @@
 #     Remove timesheet migration for a specific project from memory
 #     so it won't be migrated. If you need to change a configuration,
 #     just remove it and create it anew.
-#     
+#
 #   hubot list harvest migrations for <harvest-subdomain>
 #     Hubot responds with the currently remembered migrations for an
 #     external Harvest account.
@@ -503,9 +503,10 @@ class HarvestMigration
         target_entries = target_entries.reduce ((all, entries) -> all.concat(entries)), []
 
         # Find a synced entry in target by day and task to update or delete.
-        target_entries = target_entries.reduce (days, entry) ->
+        target_entries = target_entries.reduce (days, entry) =>
+          return if entry.notes?.indexOf("#sync") == -1 or entry.project_id != @target_project.id
           key = "#{entry.spent_at},#{entry.task_id}"
-          days[key] = entry if entry.notes?.indexOf("#sync") >= 0
+          days[key] = entry
           days
         , {}
 
