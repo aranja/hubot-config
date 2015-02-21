@@ -17,6 +17,9 @@
 #   hubot daily harvest [of <user>] [at yyyy-mm-dd] - Show a user's Harvest timers for today (or yours, if noone is specified) or a specific day
 #   hubot list harvest tasks [of <user>] - Show the Harvest project-task combinations available to a user (or you, if noone is specified)
 #   hubot is harvest down/up - Check if the Harvest API is reachable.
+#   hubot remember a harvest migration account <email> with password <password> at <harvest-subdomain> - Make hubot remember external Harvest credentials.
+#   hubot remember a harvest migration from <project>[/<task>] to <project>[/<task>] at <harvest-subdomain> - Make hubot remember a timesheet migration setup.
+#   hubot migrate [<num> days of ]<harvest-subdomain> harvest - Runs a timesheet migration to an external Harvest
 #
 # Notes:
 #   All commands and command arguments are case-insenitive. If you work
