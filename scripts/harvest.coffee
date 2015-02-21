@@ -201,7 +201,6 @@ module.exports = (robot) ->
   robot.respond /remember my harvest account (.+) with password (.+)/i, (msg) ->
     account = new HarvestAccount parse_email(msg.match[1]), msg.match[2]
     harvest = new HarvestService(account)
-    console.log(msg.match[1])
 
     # If the credentials are valid, remember them, otherwise
     # tell the user they are wrong.
@@ -349,8 +348,12 @@ module.exports = (robot) ->
     from_harvest = new HarvestService(user.harvest_account)
     to_harvest = new HarvestService(to_account)
 
-    from_harvest.find_project_and_task msg, source_project, source_task, (source_project, source_task) ->
-      to_harvest.find_project_and_task msg, target_project, target_task, (target_project, target_task) ->
+    from_harvest.find_project_and_task msg, source_project, source_task, (err, source_project, source_task) ->
+      if handle_error msg, err, "finding source project"
+        return
+      to_harvest.find_project_and_task msg, target_project, target_task, (err, target_project, target_task) ->
+        if handle_error msg, err, "finding target project"
+          return
         migrations = robot.brain.get("harvest-#{subdomain}-migrations") || []
         migration = migrations.filter((m) -> m.source_project.id == source_project.id)[0]
 
