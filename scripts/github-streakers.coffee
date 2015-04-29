@@ -35,7 +35,7 @@ module.exports = (robot) ->
       
       text = 'Streakers:\n'
       sorted.map (item, index) ->
-        text += "#{index + 1}. @#{item.name} has a #{item.count} day(s) streak"
+        text += "#{index + 1}. @#{item.name} has a #{item.count} day(s) streak\n"
 
       if msg
         msg.send text
