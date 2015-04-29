@@ -28,6 +28,7 @@
     "hubot-harvest-sync": "^1.0.0",
     "hubot-scripts": ">= 2.5.0 < 3.0.0",
     "hubot-slack": "^3.3.0",
+    "moment": "^2.10.2",
     "rsvp": "^3.0.18"
   },
   "engines": {

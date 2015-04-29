@@ -8,6 +8,7 @@
 CronJob = require('cron').CronJob
 cheerio = require('cheerio')
 rsvp = require('rsvp')
+moment = require('moment')
 
 module.exports = (robot) ->
   streakers = robot.brain.get('streakers') || {}
@@ -21,8 +22,10 @@ module.exports = (robot) ->
             return
 
           $ = cheerio.load(body)
-          count = $('#contributions-calendar .contrib-column:last-child .contrib-number').text().split(' ')[0]
-          resolve { name, count }
+          count = Number($('#contributions-calendar .contrib-column:last-child .contrib-number').text().split(' ')[0])
+          date = moment().format("YYYY-MM-DD")
+          today = Number($('#contributions-calendar rect[data-date=#{date}]').data('count'))
+          resolve { name, count, today }
 
   showStreaks = (username, msg) ->
     streakRequests = []
@@ -35,7 +38,9 @@ module.exports = (robot) ->
       
       text = 'Streakers:\n'
       sorted.map (item, index) ->
-        text += "#{index + 1}. @#{item.name} has a #{item.count} day streak\n"
+        text += "#{index + 1}. @#{item.name} has a #{item.count} day streak"
+        text += "that ends today!" if item.today == 0
+        text += "\n"
 
       if msg
         msg.send text
