@@ -23,8 +23,8 @@ module.exports = (robot) ->
 
           $ = cheerio.load(body)
           count = Number($('#contributions-calendar .contrib-column:last-child .contrib-number').text().split(' ')[0])
-          date = moment().format("YYYY-MM-DD")
-          today = Number($('#contributions-calendar rect[data-date=#{date}]').data('count'))
+          date = moment().format('YYYY-MM-DD')
+          today = Number($("#contributions-calendar rect[data-date=#{date}]").data('count'))
           resolve { name, count, today }
 
   showStreaks = (username, msg) ->
